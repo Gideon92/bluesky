@@ -6,13 +6,21 @@ def retrieve_data():
     db = my.connect(host="localhost", user="root", passwd="atmresearch2017", db="flightdata")
     c = db.cursor()
 
-    query = """ select * from FRANED where org='AMS' and des='CDG' """
+    query = """ select * from eurotest1 order by ICAO, ts"""
+    #
+    # c.execute(query)
 
-    c.execute(query)
-    data = c.fetchall()
+    df = pd.read_sql(query,db)
+    # data = c.fetchall()
+
+    # df = pd.DataFrame(list(c.fetchall()))
+    # df.columns = ["icao", "lat", "lon", "hdg", "alt", "spd", "mdl", "regid", "ts", "org", "des", "roc", "fn"]
     db.close()
+    #
+    name = "0911-eurodata.pkl"
+    df.to_pickle(name)
 
-    return data
+    return df
 
 def save_data(data,name):
     data = data
@@ -28,9 +36,9 @@ def save_data(data,name):
     return
 
 def main():
-    name = "test1.pkl"
-    data= retrieve_data()
-    save_data(data,name)
+    # name = "0711-eurodata.pkl"
+    retrieve_data()
+    # save_data(data,name)
 
     return
 

@@ -149,6 +149,11 @@ class Traffic(TrafficArrays):
             # Display information on label
             self.label       = []  # Text and bitmap of traffic label
 
+            # Create information
+            self.CRElat = np.array([])
+            self.CRElon = np.array([])
+            self.CREalt = np.array([])
+
             # Miscallaneous
             self.coslat = np.array([])  # Cosine of latitude for computations
             self.eps    = np.array([])  # Small nonzero numbers

@@ -103,6 +103,7 @@ class Simulation(QObject):
 
                 # Update metrics
                 # self.metric.update()
+                datalog.postupdate()
 
                 # Update plugins
                 plugin.update(self.simt)

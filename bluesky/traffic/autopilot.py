@@ -262,6 +262,7 @@ class Autopilot(TrafficArrays):
 
 
             bs.traf.actwp.nextaltco[idx] = toalt
+            # print(bs.traf.id[idx],bs.traf.actwp.nextaltco[idx])
             self.alt[idx]          = bs.traf.actwp.nextaltco[idx]  # dial in altitude of next waypoint as calculated
             self.dist2vs[idx]      = 9999. #[m]
 

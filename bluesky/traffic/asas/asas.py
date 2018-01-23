@@ -52,6 +52,7 @@ class ASAS(TrafficArrays):
         with RegisterElementParameters(self):
             # ASAS info per aircraft:
             self.iconf    = []            # index in 'conflicting' aircraft database
+            self.ilos = []
 
             self.active   = np.array([], dtype=bool)  # whether the autopilot follows ASAS or not
             self.trk      = np.array([])  # heading provided by the ASAS [deg]
@@ -120,17 +121,21 @@ class ASAS(TrafficArrays):
         self.u            = np.array([])
         self.v            = np.array([])
 
+        self.confcount = 0  # Count of total conflicts
+        self.LOScount = 0  # Count of total LOS
         self.conflist_all = []  # List of all Conflicts
-        self.LOSlist_all  = []  # List of all Losses Of Separation
+        self.conflist_reallyall = []
+        self.LOSlist_all = []  # List of all Losses Of Separation
         self.conflist_exp = []  # List of all Conflicts in experiment time
-        self.LOSlist_exp  = []  # List of all Losses Of Separation in experiment time
+        self.LOSlist_exp = []  # List of all Losses Of Separation in experiment time
         self.conflist_now = []  # List of current Conflicts
-        self.LOSlist_now  = []  # List of current Losses Of Separation
+        self.LOSlist_now = []  # List of current Losses Of Separation
 
         # For keeping track of locations with most severe intrusions
-        self.LOSmaxsev    = []
-        self.LOShmaxsev   = []
-        self.LOSvmaxsev   = []
+        #        self.LOSmaxsev    = []
+        self.LOSmaxsev = {}  # Dict of max severity in current Losses Of Separation
+        self.LOShmaxsev = {}
+        self.LOSvmaxsev = {}
 
     def toggle(self, flag=None):
         if flag is None:

@@ -25,6 +25,8 @@ def writescenario(data,scenarioname):
         alt = dataframe.iloc[0]['alt']
         spd = dataframe.iloc[0]['spd']
 
+
+
         lines.append("00:00:00.00> CRE " + str(acid) + "," + str(actype) + "," + str(lat) + "," + str(lon) + ","
                      + str(hdg) + ","+ str(alt) + "," + str(spd) + "\n")
 
@@ -37,8 +39,9 @@ def writescenario(data,scenarioname):
             lon = dataframe.iloc[x]['lon']  # longitude
             alt = dataframe.iloc[x]['alt']  # altitude
 
+
             #print each waypoint
-            lines.append("00:00:00.00> ADDWPT " + str(acid) + "," + str(lat) + "," + str(lon) + "," + str(alt)
+            lines.append("00:00:00.00> ADDWPT " + str(acid) + "," + str(lat) + "," + str(lon) + ","
                          + str(alt) + "\n")
 
     directory = (dirname(dirname(dirname(abspath(__file__)))))
