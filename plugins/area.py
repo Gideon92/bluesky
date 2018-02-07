@@ -85,6 +85,7 @@ class Area(TrafficArrays):
             self.distance3D = np.array([])
             self.work = np.array([])
             self.fuel = np.array([])
+            self.mass = np.array([])
             self.create_time = np.array([])
 
         self.CONFlogger = datalog.defineLogger('CONFLOG', logHeaders.CONFheader)
@@ -191,6 +192,8 @@ class Area(TrafficArrays):
         else:
             self.work += (traf.perf.Thr * self.dt * resultantspd)
             self.fuel += traf.perf.ff * self.dt
+            self.mass = traf.perf.mass
+            print(self.mass)
             print(self.fuel)
 
 

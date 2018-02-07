@@ -294,29 +294,29 @@ def ResumeNav(asas, traf, simt):
 
         # ---- Start of addition by Anouk Scholtes
         # Uneven aircraft are arriving aircraft, compute arrival boolean.
-        arrBool1 = int(ac1[2:]) % 2
-        arrBool2 = int(ac2[2:]) % 2
-
-        # Check in what zones the conflicting aircraft fly, and compute the difference between the zones
-        zones = checkZone(np.array([id1, id2]), traf)
-        diffzones = diffZones(zones)
-
-        # If one of the aircraft flies in the inner circle, the conflict should be ignored.
-        if 11 in zones:
-            asas.active[id1] = False
-            asas.active[id2] = False
-            continue
-
-        # If aircraft are flying in the same direction and the difference between their zone numbers is
-        # bigger than 1, the conflict can be ignored because both aircraft are flying towards the center from
-        # different zones. If they have a different direction, or fly in adjecent zones, the conflict should
-        # never be ignored. Finally, if one of the aircraft is flying in the area outside the zone radius
-        # (where zone number == 0) the conflict should also never be ignored.
-        elif (diffzones > 1 and arrBool1 == arrBool2) and (zones[0] != 0 and zones[1] != 0):
-            asas.active[id1] = False
-            asas.active[id2] = False
-            continue
-        # ---- End of addition by Anouk Scholtes
+        # arrBool1 = int(ac1[2:]) % 2
+        # arrBool2 = int(ac2[2:]) % 2
+        #
+        # # Check in what zones the conflicting aircraft fly, and compute the difference between the zones
+        # zones = checkZone(np.array([id1, id2]), traf)
+        # diffzones = diffZones(zones)
+        #
+        # # If one of the aircraft flies in the inner circle, the conflict should be ignored.
+        # if 11 in zones:
+        #     asas.active[id1] = False
+        #     asas.active[id2] = False
+        #     continue
+        #
+        # # If aircraft are flying in the same direction and the difference between their zone numbers is
+        # # bigger than 1, the conflict can be ignored because both aircraft are flying towards the center from
+        # # different zones. If they have a different direction, or fly in adjecent zones, the conflict should
+        # # never be ignored. Finally, if one of the aircraft is flying in the area outside the zone radius
+        # # (where zone number == 0) the conflict should also never be ignored.
+        # elif (diffzones > 1 and arrBool1 == arrBool2) and (zones[0] != 0 and zones[1] != 0):
+        #     asas.active[id1] = False
+        #     asas.active[id2] = False
+        #     continue
+        # # ---- End of addition by Anouk Scholtes
 
         if id1 >= 0 and id2 >= 0:
             # Check if conflict is past CPA

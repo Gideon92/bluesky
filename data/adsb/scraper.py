@@ -65,6 +65,7 @@ while True:
     for zone in zones:
         bounds = ','.join(str(z) for z in zone)
         url = base_url + "&bounds=" + bounds
+        print(url)
 
         try:
             r = s.get(url)

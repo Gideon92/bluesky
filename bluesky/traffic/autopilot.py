@@ -39,8 +39,8 @@ class Autopilot(TrafficArrays):
             self.orig = []  # Four letter code of origin airport
             self.dest = []  # Four letter code of destination airport
 
-        # Route objects
-        self.route = []
+            # Route objects
+            self.route = []
 
     def create(self, n=1):
         super(Autopilot, self).create(n)
@@ -54,12 +54,7 @@ class Autopilot(TrafficArrays):
         self.dist2vs[-n:] = -999.
 
         # Route objects
-        self.route.extend([Route()] * n)
-
-    def delete(self, idx):
-        super(Autopilot, self).delete(idx)
-        # Route objects
-        del self.route[idx]
+        self.route[-n:] = [Route() for _ in range(n)]
 
     def update(self, simt):
         # Scheduling: when dt has passed or restart
@@ -102,11 +97,11 @@ class Autopilot(TrafficArrays):
                     # Depending on crossover altitude we fix CAS or Mach
                     if bs.traf.abco[i] and spd>2.0:
                         bs.traf.actwp.spd[i] = cas2mach(spd,bs.traf.alt[i])
-                    
+
                     elif bs.traf.belco[i] and spd<=2.0:
                         bs.traf.actwp.spd[i] = mach2cas(spd,bs.traf.alt[i])
-                  
-                    else:  
+
+                    else:
                         bs.traf.actwp.spd[i] = spd
 
                 else:
@@ -124,33 +119,32 @@ class Autopilot(TrafficArrays):
             #=============== End of Waypoint switching loop ===================
 
             #================= Continuous FMS guidance ========================
-            
+
             # Waypoint switching in the loop above was scalar (per a/c with index i)
             # Code below is vectorized, with arrays for all aircraft
-            
+
             # Do VNAV start of descent check
             dy = (bs.traf.actwp.lat - bs.traf.lat)  #[deg lat = 60 nm]
             dx = (bs.traf.actwp.lon - bs.traf.lon) * bs.traf.coslat #[corrected deg lon = 60 nm]
             dist2wp   = 60. * nm * np.sqrt(dx * dx + dy * dy) # [m]
 
             # VNAV logic: descend as late as possible, climb as soon as possible
-            startdescent = bs.traf.swvnav * ((dist2wp < self.dist2vs) + \
-                                             (bs.traf.actwp.nextaltco > bs.traf.alt))
+            startdescent = (dist2wp < self.dist2vs) + (bs.traf.actwp.nextaltco > bs.traf.alt)
 
             # If not lnav:Climb/descend if doing so before lnav/vnav was switched off
             #    (because there are no more waypoints). This is needed
             #    to continue descending when you get into a conflict
             #    while descending to the destination (the last waypoint)
             #    Use 0.1 nm (185.2 m) circle in case turndist might be zero
-            self.swvnavvs = np.where(bs.traf.swlnav, startdescent, 
+            self.swvnavvs = bs.traf.swvnav * np.where(bs.traf.swlnav, startdescent,
                                          dist <= np.maximum(185.2,bs.traf.actwp.turndist))
 
             #Recalculate V/S based on current altitude and distance to next alt constraint
             # How much time do we have before we need to descend?
-            
+
             t2go2alt = np.maximum(0.,(dist2wp + bs.traf.actwp.xtoalt - bs.traf.actwp.turndist)) \
                                         / np.maximum(0.5,bs.traf.gs)
-            
+
             # use steepness to calculate V/S unless we need to descend faster
             bs.traf.actwp.vs = np.maximum(self.steepness*bs.traf.gs, \
                                    np.abs((bs.traf.actwp.nextaltco-bs.traf.alt))  \
@@ -163,7 +157,6 @@ class Autopilot(TrafficArrays):
             # self.vs = np.where(self.swvnavvs, self.vnavvs, bs.traf.apvsdef * bs.traf.limvs_flag)
             selvs = np.where(abs(bs.traf.selvs) > 0.1, bs.traf.selvs, bs.traf.apvsdef) # m/s
             self.vs = np.where(self.swvnavvs, self.vnavvs, selvs)
-
             self.alt = np.where(self.swvnavvs, bs.traf.actwp.nextaltco, bs.traf.selalt)
 
             # When descending or climbing in VNAV also update altitude command of select/hold mode
@@ -175,20 +168,21 @@ class Autopilot(TrafficArrays):
             # FMS speed guidance: anticipate accel distance
 
             # Actual distance it takes to decelerate
-            nexttas  = vcasormach2tas(bs.traf.actwp.spd,bs.traf.alt) 
+            nexttas  = vcasormach2tas(bs.traf.actwp.spd,bs.traf.alt)
             tasdiff  = nexttas - bs.traf.tas # [m/s]
             dtspdchg = np.abs(tasdiff)/np.maximum(0.01,np.abs(bs.traf.ax)) #[s]
             dxspdchg = 0.5*np.sign(tasdiff)*np.abs(bs.traf.ax)*dtspdchg*dtspdchg + bs.traf.tas*dtspdchg #[m]
-            
+
             usespdcon      = (dist2wp < dxspdchg)*(bs.traf.actwp.spd > 0.)*bs.traf.swvnav
             bs.traf.selspd = np.where(usespdcon, bs.traf.actwp.spd, bs.traf.selspd)
-           
+
         # Below crossover altitude: CAS=const, above crossover altitude: Mach = const
         self.tas = vcasormach2tas(bs.traf.selspd, bs.traf.alt)
 
 
     def ComputeVNAV(self, idx, toalt, xtoalt):
-        if not (toalt >= 0 and bs.traf.swvnav[idx]):
+        # Check if there is a target altitude and VNAV is on, else return doing nothing
+        if toalt < 0 or not bs.traf.swvnav[idx]:
             self.dist2vs[idx] = -999
             return
 
@@ -236,7 +230,7 @@ class Autopilot(TrafficArrays):
 
             # Dist to waypoint where descent should start [m]
             self.dist2vs[idx] = bs.traf.actwp.turndist[idx] + \
-                               (bs.traf.alt[idx] - bs.traf.actwp.nextaltco[idx]) / self.steepness
+                               np.abs(bs.traf.alt[idx] - bs.traf.actwp.nextaltco[idx]) / self.steepness
 
             # Flat earth distance to next wp
             dy = (bs.traf.actwp.lat[idx] - bs.traf.lat[idx])   # [deg lat = 60. nm]
@@ -262,7 +256,6 @@ class Autopilot(TrafficArrays):
 
 
             bs.traf.actwp.nextaltco[idx] = toalt
-            # print(bs.traf.id[idx],bs.traf.actwp.nextaltco[idx])
             self.alt[idx]          = bs.traf.actwp.nextaltco[idx]  # dial in altitude of next waypoint as calculated
             self.dist2vs[idx]      = 9999. #[m]
 
@@ -299,24 +292,16 @@ class Autopilot(TrafficArrays):
 
     def selvspdcmd(self, idx, vspd):
         """ Vertical speed autopilot command: VS acid vspd """
-        if idx < 0 or idx >= bs.traf.ntraf:
-            return False, "VS: Aircraft does not exist"
-
         bs.traf.selvs[idx] = vspd
         # bs.traf.vs[idx] = vspd
         bs.traf.swvnav[idx] = False
 
     def selhdgcmd(self, idx, hdg):  # HDG command
         """ Select heading command: HDG acid, hdg """
-
-        if idx<0 or idx>=bs.traf.ntraf:
-            return False,"HDG: Aircraft does not exist"
-
-
         # If there is wind, compute the corresponding track angle
         if bs.traf.wind.winddim > 0:
-            tasnorth = bs.traf.tas[idx] * cos(radians(hdg))
-            taseast  = bs.traf.tas[idx] * sin(radians(hdg))
+            tasnorth = bs.traf.tas[idx] * np.cos(np.radians(hdg))
+            taseast  = bs.traf.tas[idx] * np.sin(np.radians(hdg))
             vnwnd, vewnd = bs.traf.wind.getdata(bs.traf.lat[idx], bs.traf.lon[idx], bs.traf.alt[idx])
             gsnorth    = tasnorth + vnwnd
             gseast     = taseast  + vewnd
@@ -331,21 +316,11 @@ class Autopilot(TrafficArrays):
 
     def selspdcmd(self, idx, casmach):  # SPD command
         """ Select speed command: SPD acid, casmach (= CASkts/Mach) """
-
-        if idx<0 or idx>=bs.traf.ntraf:
-            return False,"SPD: Aircraft does not exist"
-
-        # Depending on or position relative to crossover altitude, 
+        # Depending on or position relative to crossover altitude,
         # we will maintain CAS or Mach when altitude changes
         # We will convert values when needed
-        if bs.traf.abco[idx] and casmach>2.0:
-            bs.traf.selspd[idx] = cas2mach(casmach,bs.traf.alt[idx])
-        
-        elif bs.traf.belco[idx] and casmach<=2.0:
-            bs.traf.selspd[idx] = mach2cas(casmach,bs.traf.alt[idx])
-      
-        else: # User uses correct Mach/CAS 
-            bs.traf.selspd[idx] = casmach
+        _, cas, m = vcasormach2tas(casmach, bs.traf.alt[idx])
+        bs.traf.selspd[idx] = np.where(bs.traf.abco[idx], m, cas)
 
         # Switch off VNAV: SPD command overrides
         bs.traf.swvnav[idx]   = False
@@ -477,7 +452,3 @@ class Autopilot(TrafficArrays):
                 return False, ("VNAV " + bs.traf.id[idx] + ": no waypoints or destination specified")
         else:
             bs.traf.swvnav[idx] = False
-
-    def reset(self):
-        super(Autopilot,self).reset()
-        self.route = []

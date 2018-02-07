@@ -102,6 +102,8 @@ class Traffic(TrafficArrays):
                 self.M       = np.array([])  # mach number
                 self.vs      = np.array([])  # vertical speed [m/s]
 
+
+
                 # Atmosphere
                 self.p       = np.array([])  # air pressure [N/m2]
                 self.rho     = np.array([])  # air density [kg/m3]
@@ -133,6 +135,7 @@ class Traffic(TrafficArrays):
             self.ax       = np.array([])  # [m/s2] absolute value of longitudinal accelleration
             self.bank     = np.array([])  # nominal bank angle, [radian]
             self.swhdgsel = np.array([], dtype=np.bool)  # determines whether aircraft is turning
+            self.mass = np.array([])  # mass
 
             # Crossover altitude
             self.abco   = np.array([])
@@ -262,7 +265,7 @@ class Traffic(TrafficArrays):
         # manually in Traffic.
         self.create_children(n)
 
-    def create(self, acid=None, actype="B744", aclat=None, aclon=None, achdg=None, acalt=None, casmach=None):
+    def create(self, acid=None, actype="B744", aclat=None, aclon=None, achdg=None, acalt=None, casmach=None, acmass=None):
         """Create an aircraft"""
         # Catch missing acid, replace by a default
         if acid is None or acid == "*":
@@ -297,6 +300,10 @@ class Traffic(TrafficArrays):
 
         self.hdg[-1]  = achdg
         self.trk[-1]  = achdg
+
+
+        # Aircraft weight
+        self.mass[-1]= acmass
 
         # Velocities
         self.tas[-1], self.cas[-1], self.M[-1] = casormach(casmach, acalt)

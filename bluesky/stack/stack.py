@@ -222,8 +222,8 @@ def init():
             "Define a circle-shaped area"
         ],
         "CRE": [
-            "CRE acid,type,lat,lon,hdg,alt,spd",
-            "txt,txt,latlon,hdg,alt,spd",
+            "CRE acid,type,lat,lon,hdg,alt,spd,mass",
+            "txt,txt,latlon,hdg,alt,spd,float",
             bs.traf.create,
             "Create an aircraft"
         ],

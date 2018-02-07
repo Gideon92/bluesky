@@ -195,7 +195,7 @@ class PerfBADA(TrafficArrays):
 
         # Initial aircraft mass is currently reference mass.
         # BADA 3.12 also supports masses between 1.2*mmin and mmax
-        self.mass[-n:]      = coeff.m_ref * 1000.0
+        self.mass[-n:]      = bs.traf.mass * 1000.0
         self.mmin[-n:]      = coeff.m_min * 1000.0
         self.mmax[-n:]      = coeff.m_max * 1000.0
 
