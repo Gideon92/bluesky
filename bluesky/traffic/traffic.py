@@ -1,5 +1,6 @@
 """ BlueSky traffic implementation."""
 from __future__ import print_function
+import collections
 import numpy as np
 from math import *
 from random import random, randint
@@ -12,6 +13,7 @@ from bluesky.tools.aero import fpm, kts, ft, g0, Rearth, nm, \
 from bluesky.tools.trafficarrays import TrafficArrays, RegisterElementParameters
 
 from .windsim import WindSim
+from .conditional import Condition
 from .trails import Trails
 from .adsbmodel import ADSB
 from .asas import ASAS
@@ -25,24 +27,24 @@ from bluesky import settings
 # Register settings defaults
 settings.set_variable_defaults(performance_model='bluesky', snapdt=1.0, instdt=1.0, skydt=1.0, asas_pzr=5.0, asas_pzh=1000.0)
 
-try:
-    if settings.performance_model == 'bluesky':
-        print('Using BlueSky performance model')
-        from .performance.legacy.perfbs import PerfBS as Perf
-
-    elif settings.performance_model == 'bada':
-        print('Using BADA Perfromance model')
-        from .performance.legacy.perfbada import PerfBADA as Perf
-
-    elif settings.performance_model == 'nap':
-        print('Using Nifty Aircarft Perfromance (NAP) model')
-        from .performance.nap import PerfNAP as Perf
-
-
-except ImportError as err:
-    print(err.args[0])
-    print('Falling back to BlueSky performance model')
+# try:
+if settings.performance_model == 'bluesky':
+    print('Using BlueSky performance model')
     from .performance.legacy.perfbs import PerfBS as Perf
+
+elif settings.performance_model == 'bada':
+    print('Using BADA Perfromance model')
+    from .performance.legacy.perfbada import PerfBADA as Perf
+
+elif settings.performance_model == 'nap':
+    print('Using Nifty Aircarft Perfromance (NAP) model')
+    from .performance.nap import PerfNAP as Perf
+
+
+# except ImportError as err:
+#     print(err.args[0])
+#     print('Falling back to BlueSky performance model')
+#     from .performance.legacy.perfbs import PerfBS as Perf
 
 
 class Traffic(TrafficArrays):
@@ -69,8 +71,12 @@ class Traffic(TrafficArrays):
         TrafficArrays.SetRoot(self)
 
         self.ntraf = 0
+
+
+        self.cond = Condition()  # Conditional commands list
         self.wind = WindSim()
         self.turbulence = Turbulence()
+        self.translvl = 5000.*ft # [m] Default transition level
 
         # Define the periodic loggers
         # ToDo: explain what these line sdo in comments (type of logs?)
@@ -181,54 +187,78 @@ class Traffic(TrafficArrays):
         # Noise (turbulence, ADBS-transmission noise, ADSB-truncated effect)
         self.setNoise(False)
 
-    def mcreate(self, count, actype=None, alt=None, spd=None, dest=None):
-        """ Create multiple random aircraft in a specified area """
-        area = bs.scr.getviewlatlon()
-        idbase = chr(randint(65, 90)) + chr(randint(65, 90))
-        if actype is None:
-            actype = 'B744'
+        # Reset transition level to default value
+        self.translvl = 5000.*ft
 
-        n = count
+    def create(self, n=1, actype="B744", acalt=None, acspd=None, dest=None,
+                aclat=None, aclon=None, achdg=None, acid=None):
+        """ Create multiple random aircraft in a specified area """
+        area = bs.scr.getviewbounds()
+        if acid is None:
+            idtmp = chr(randint(65, 90)) + chr(randint(65, 90)) + '{:>05}'
+            acid = [idtmp.format(i) for i in range(n)]
+
+
+        elif isinstance(acid, str):
+            # Check if not already exist
+            if self.id.count(acid.upper()) > 0:
+                return False, acid + " already exists."  # already exists do nothing
+
+
+            acid = [acid]
+
+        if isinstance(actype, str):
+            actype = n * [actype]
+
         super(Traffic, self).create(n)
 
         # Increase number of aircraft
-        self.ntraf = self.ntraf + count
+        self.ntraf += n
 
-        acids = []
-        aclats = []
-        aclons = []
-        achdgs = []
-        acalts = []
-        acspds = []
+        if aclat is None:
+            aclat = np.random.rand(n) * (area[1] - area[0]) + area[0]
 
-        for i in range(count):
-            acids.append((idbase + '%05d' % i).upper())
-            aclats.append(random() * (area[1] - area[0]) + area[0])
-            aclons.append(random() * (area[3] - area[2]) + area[2])
-            achdgs.append(float(randint(1, 360)))
-            acalts.append((randint(2000, 39000) * ft) if alt is None else alt)
-            acspds.append((randint(250, 450) * kts) if spd is None else spd)
+        if aclon is None:
+            aclon = np.random.rand(n) * (area[3] - area[2]) + area[2]
+
+        # Limit longitude to [-180.0, 180.0]
+        if n == 1:
+            aclon = aclon - 360 if aclon > 180 else \
+                    aclon + 360 if aclon < -180.0 else aclon
+        else:
+            aclon[aclon > 180.0] -= 360.0
+            aclon[aclon < -180.0] += 360.0
+
+        if achdg is None:
+            achdg = np.random.randint(1, 360, n)
+
+        if acalt is None:
+            acalt = np.random.randint(2000, 39000, n) * ft
+
+        if acspd is None:
+            acspd = np.random.randint(250, 450, n) * kts
 
         # Aircraft Info
-        self.id[-n:]   = acids
-        self.type[-n:] = [actype] * n
+        self.id[-n:]   = acid
+        self.type[-n:] = actype
 
         # Positions
-        self.lat[-n:]  = aclats
-        self.lon[-n:]  = aclons
-        self.alt[-n:]  = acalts
+        self.lat[-n:]  = aclat
+        self.lon[-n:]  = aclon
+        self.alt[-n:]  = acalt
 
-        self.hdg[-n:]  = achdgs
-        self.trk[-n:]  = achdgs
+        self.hdg[-n:]  = achdg
+        self.trk[-n:]  = achdg
 
         # Velocities
-        self.tas[-n:], self.cas[-n:], self.M[-n:] = vcasormach(acspds, acalts)
+        self.tas[-n:], self.cas[-n:], self.M[-n:] = vcasormach(acspd, acalt)
         self.gs[-n:]      = self.tas[-n:]
-        self.gsnorth[-n:] = self.tas[-n:] * np.cos(np.radians(self.hdg[-n:]))
-        self.gseast[-n:]  = self.tas[-n:] * np.sin(np.radians(self.hdg[-n:]))
+        hdgrad = np.radians(achdg)
+        self.gsnorth[-n:] = self.tas[-n:] * np.cos(hdgrad)
+        self.gseast[-n:]  = self.tas[-n:] * np.sin(hdgrad)
 
         # Atmosphere
-        self.p[-n:], self.rho[-n:], self.Temp[-n:] = vatmos(acalts)
+        self.p[-n:], self.rho[-n:], self.Temp[-n:] = vatmos(acalt)
 
         # Wind
         if self.wind.winddim > 0:
@@ -258,13 +288,14 @@ class Traffic(TrafficArrays):
         self.label[-n:] = n*[['', '', '', 0]]
 
         # Miscallaneous
-        self.coslat[-n:] = np.cos(np.radians(aclats))  # Cosine of latitude for flat-earth aproximations
+        self.coslat[-n:] = np.cos(np.radians(aclat))  # Cosine of latitude for flat-earth aproximations
         self.eps[-n:] = 0.01
 
         # Finally call create for child TrafficArrays. This only needs to be done
         # manually in Traffic.
         self.create_children(n)
 
+# <<<<<<< HEAD
     def create(self, acid=None, actype="B744", aclat=None, aclon=None, achdg=None, acalt=None, casmach=None, acmass=None):
         """Create an aircraft"""
         # Catch missing acid, replace by a default
@@ -351,6 +382,8 @@ class Traffic(TrafficArrays):
 
         return True
 
+# =======
+# >>>>>>> upstream/master
     def creconfs(self, acid, actype, targetidx, dpsi, cpa, tlosh, dH=None, tlosv=None, spd=None):
         latref  = self.lat[targetidx]  # deg
         lonref  = self.lon[targetidx]  # deg
@@ -398,16 +431,24 @@ class Traffic(TrafficArrays):
         achdg      = degrees(atan2(tase, tasn))
 
         # Create and, when necessary, set vertical speed
-        self.create(acid, actype, aclat, aclon, achdg, acalt, acspd)
-        self.ap.selalt(len(self.lat) - 1, altref, acvs)
+        self.create(1, actype, acalt, acspd, None, aclat, aclon, achdg, acid)
+        self.ap.selaltcmd(len(self.lat) - 1, altref, acvs)
         self.vs[-1] = acvs
 
     def delete(self, idx):
         """Delete an aircraft"""
+        # if this is a multiple delete, sort first for list delete
+        if isinstance(idx, collections.abc.Collection):
+            idx.sort()
+
+        # Call the actual delete function
         super(Traffic, self).delete(idx)
 
-        # Decrease number of aircraft
-        self.ntraf = self.ntraf - 1
+        # Update conditions list
+        self.cond.delac(idx)
+
+        # Update number of aircraft
+        self.ntraf = len(self.lat)
         return True
 
     def update(self, simt, simdt):
@@ -422,9 +463,9 @@ class Traffic(TrafficArrays):
         self.adsb.update(simt)
 
         #---------- Fly the Aircraft --------------------------
-        self.ap.update(simt)
-        self.asas.update(simt)
-        self.pilot.APorASAS()
+        self.ap.update(simt)     # Autopilot logic
+        self.asas.update(simt)   # Airboren Separation Assurance
+        self.pilot.APorASAS()    # Decide autopilot or ASAS
 
         #---------- NAP Performance Update ------------------------
         if settings.performance_model == 'nap':
@@ -445,37 +486,42 @@ class Traffic(TrafficArrays):
         #---------- Simulate Turbulence -----------------------
         self.turbulence.Woosh(simdt)
 
+        # Check whther new traffci state triggers conditional commands
+        self.cond.update()
+
         #---------- Aftermath ---------------------------------
         self.trails.update(simt)
         return
 
     def UpdateAirSpeed(self, simdt, simt):
-        # Acceleration
-        self.delspd = self.pilot.tas - self.tas
-
-        swspdsel = np.abs(self.delspd) > 0.4  # <1 kts = 0.514444 m/s
-        ax = self.perf.acceleration(simdt)
+        # Compute horizontal acceleration
+        delta_spd = self.pilot.tas - self.tas
+        need_ax = np.abs(delta_spd) > kts     # small threshold
+        self.ax = need_ax * np.sign(delta_spd) * self.perf.acceleration()
+        self.delspd = delta_spd  # class object for legacy performance models
 
         # Update velocities
-        self.tas = np.where(swspdsel, \
-                            self.tas + swspdsel * ax * np.sign(self.delspd) * simdt,\
-                            self.pilot.tas)
-
+        self.tas = self.tas + self.ax * simdt
         self.cas = vtas2cas(self.tas, self.alt)
-        self.M   = vtas2mach(self.tas, self.alt)
+        self.M = vtas2mach(self.tas, self.alt)
 
         # Turning
         turnrate = np.degrees(g0 * np.tan(self.bank) / np.maximum(self.tas, self.eps))
-        delhdg   = (self.pilot.hdg - self.hdg + 180.) % 360 - 180.  # [deg]
-        self.swhdgsel = np.abs(delhdg) > np.abs(2. * simdt * turnrate)
+        delhdg = (self.pilot.hdg - self.hdg + 180) % 360 - 180  # [deg]
+        self.swhdgsel = np.abs(delhdg) > np.abs(2 * simdt * turnrate)
 
         # Update heading
         self.hdg = (self.hdg + simdt * turnrate * self.swhdgsel * np.sign(delhdg)) % 360.
 
         # Update vertical speed
-        delalt   = self.pilot.alt - self.alt
-        self.swaltsel = np.abs(delalt) > np.maximum(10 * ft, np.abs(2. * simdt * np.abs(self.vs)))
-        self.vs  = self.swaltsel * np.sign(delalt) * np.abs(self.pilot.vs)
+        delta_alt = self.pilot.alt - self.alt
+        self.swaltsel = np.abs(delta_alt) > np.maximum(10 * ft, np.abs(2 * simdt * np.abs(self.vs)))
+        target_vs = self.swaltsel * np.sign(delta_alt) * np.abs(self.pilot.vs)
+        delta_vs = target_vs - self.vs
+        # print(delta_vs / fpm)
+        need_az = np.abs(delta_vs) > 300 * fpm   # small threshold
+        self.az = need_az * np.sign(delta_vs) * (300 * fpm)   # fixed vertical acc approx 1.6 m/s^2
+        self.vs = np.where(need_az, self.vs+self.az*simdt, target_vs)
 
     def UpdateGroundSpeed(self, simdt):
         # Compute ground speed and track from heading, airspeed and wind
@@ -503,10 +549,21 @@ class Traffic(TrafficArrays):
 
     def id2idx(self, acid):
         """Find index of aircraft id"""
-        try:
-            return self.id.index(acid.upper())
-        except:
-            return -1
+        if not isinstance(acid, str):
+
+            # id2idx is called for multiple id's
+            # Fast way of finding indices of all ACID's in a given list
+            tmp = dict((v, i) for i, v in enumerate(self.id))
+            return [tmp.get(acidi, -1) for acidi in acid]
+        else:
+             # Catch last created id (* or # symbol)
+            if acid in ('#','*'):
+                return self.ntraf-1
+
+            try:
+                return self.id.index(acid.upper())
+            except:
+                return -1
 
     def setNoise(self, noise=None):
         """Noise (turbulence, ADBS-transmission noise, ADSB-truncated effect)"""
@@ -526,20 +583,21 @@ class Traffic(TrafficArrays):
         self.lat[idx]      = lat
         self.lon[idx]      = lon
 
-        if alt:
+        if alt is not None:
             self.alt[idx]    = alt
             self.selalt[idx] = alt
 
-        if hdg:
+        if hdg is not None:
             self.hdg[idx]  = hdg
             self.ap.trk[idx] = hdg
 
-        if casmach:
-            self.tas[idx], self.selspd[-1], dummy = casormach(casmach, alt)
+        if casmach is not None:
+            self.tas[idx], self.selspd[idx], _ = vcasormach(casmach, alt)
 
-        if vspd:
-            self.vs[idx]       = vspd
+        if vspd is not None:
+            self.vs[idx]     = vspd
             self.swvnav[idx] = False
+
 
     def nom(self, idx):
         """ Reset acceleration back to nominal (1 kt/s^2): NOM acid """
@@ -592,16 +650,15 @@ class Traffic(TrafficArrays):
 
             # Show a/c info and highlight route of aircraft in radar window
             # and pan to a/c (to show route)
-            bs.scr.showacinfo(acid, lines)
-            return bs.SIMPLE_ECHO, lines
+            bs.scr.showroute(acid)
+            return True, lines
 
         # Waypoint: airport, navaid or fix
         else:
             wp = idxorwp.upper()
 
             # Reference position for finding nearest
-            reflat = bs.scr.ctrlat
-            reflon = bs.scr.ctrlon
+            reflat, reflon = bs.scr.getviewctr()
 
             lines = "Info on "+wp+":\n"
 
@@ -713,13 +770,11 @@ class Traffic(TrafficArrays):
                         return False,idxorwp+" not found as a/c, airport, navaid or waypoint"
 
             # Show what we found on airport and navaid/waypoint
-            return bs.SIMPLE_ECHO, lines
+            return True, lines
 
     def airwaycmd(self,key=""):
         # Show conections of a waypoint
-
-        reflat = bs.scr.ctrlat
-        reflon = bs.scr.ctrlon
+        reflat, reflon = bs.scr.getviewctr()
 
         if key=="":
             return False,'AIRWAY needs waypoint or airway'
@@ -742,6 +797,23 @@ class Traffic(TrafficArrays):
                     if len(c)>=2:
                         # Add airway, direction, waypoint
                         lines = lines+ c[0]+": to "+c[1]+"\n"
-                return bs.SIMPLE_ECHO, lines[:-1]  # exclude final newline
+                return True, lines[:-1]  # exclude final newline
             else:
                 return False,"No airway legs found for ",key
+
+    def settrans(self,alt=-999.):
+        """ Set or show transition level"""
+
+        # in case a valid value is ginve set it
+        if alt>-900.:
+            if alt>0.:
+                self.translvl = alt
+                return True
+            else:
+                return False,"Transition level needs to be ft/FL and larger than zero"
+
+        # In case no value is given, show it
+        else:
+            tlvl = int(round(self.translvl/ft))
+            return True,"Transition level = " + \
+                          str(tlvl) + "/FL" +  str(int(round(tlvl/100.)))

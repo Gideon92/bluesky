@@ -193,8 +193,8 @@ class Area(TrafficArrays):
             self.work += (traf.perf.Thr * self.dt * resultantspd)
             self.fuel += traf.perf.ff * self.dt
             self.mass = traf.perf.mass
-            print(self.mass)
-            print(self.fuel)
+            # print(self.mass)
+            # print(self.fuel)
 
 
     def updateAsasLists(self, delidx):
@@ -334,6 +334,9 @@ class Area(TrafficArrays):
                 area.logIntrusion('DEL', intrpair, idx1, idx2)
 
     def logIntrusion(self, eventstr, intrpair, idx1, idx2):
+        # print('Losmaxs: ', traf.asas.LOSmaxsev)
+        # print('idx1: ', idx1)
+        # print('acid: ', traf.id[idx1])
         """ Send input to the INTRlogger """
         self.INTRlogger.log(
             np.array([eventstr]),
@@ -371,9 +374,9 @@ class Area(TrafficArrays):
             traf.pilot.tas[idx2],
             traf.pilot.vs[idx2],
             traf.pilot.hdg[idx2],
-            traf.asas.LOSmaxsev[intrpair],
-            traf.asas.LOShmaxsev[intrpair],
-            traf.asas.LOSvmaxsev[intrpair],
+            traf.asas.LOSmaxsev[-1],
+            traf.asas.LOShmaxsev[-1],
+            traf.asas.LOSvmaxsev[-1],
             np.array([traf.asas.LOScount])
         )
 

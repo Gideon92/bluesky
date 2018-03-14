@@ -105,8 +105,7 @@ class Navdatabase:
 
         # No data: give info on waypoint
         elif lat==None or lon==None:
-            reflat = bs.scr.ctrlat
-            reflon = bs.scr.ctrlon
+            reflat, reflon = bs.scr.getviewctr()
             if self.wpid.count(name.upper()) > 0:
                 i = self.getwpidx(name.upper(),reflat,reflon)
                 txt = self.wpid[i]+" : "+str(self.wplat[i])+","+str(self.wplon[i])
@@ -234,7 +233,7 @@ class Navdatabase:
 
     def getapinear(self, lat, lon):  # lat,lon in degrees
         """Get closest airport index"""
-        return self.getinear(self.aptlat, self.aplon, lat, lon)
+        return self.getinear(self.aptlat, self.aptlon, lat, lon)
 
     def getinside(self, wlat, wlon, lat0, lat1, lon0, lon1):
         """Get indices inside given box"""

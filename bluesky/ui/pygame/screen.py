@@ -279,6 +279,11 @@ class Screen:
         self.updateNavBuffers()
         return
 
+    def shownd(self, acid):
+        if acid:
+            self.ndacid = acid
+        self.swnavdisp = not self.swnavdisp
+
     def updateNavBuffers(self):
         self.wpswbmp = len(bs.navdb.wplat) * [False]
         self.wplabel = len(bs.navdb.wplat) * [0]
@@ -286,10 +291,11 @@ class Screen:
         self.apswbmp = len(bs.navdb.aptlat) * [False]
         self.aplabel = len(bs.navdb.aptlat) * [0]
 
-    def echo(self, msg):
-        msgs = msg.split('\n')
-        for m in msgs:
-            self.editwin.echo(m)
+    def echo(self, msg='', flags=0):
+        if msg:
+            msgs = msg.split('\n')
+            for m in msgs:
+                self.editwin.echo(m)
         return
 
     def showssd(self, param):
@@ -676,7 +682,10 @@ class Screen:
                 else:
                     label.append(" ")
                 if self.swlabel > 1:
-                    label.append(str(int(bs.traf.alt[i] / ft)))  # Line 2 of label: altitude
+                    if bs.traf.alt[i]>bs.traf.translvl:
+                        label.append("FL"+str(int(round(bs.traf.alt[i] / (100.*ft)))))  # Line 2 of label: altitude
+                    else:
+                        label.append(str(int(round(bs.traf.alt[i] / ft))))  # Line 2 of label: altitude
                 else:
                     label.append(" ")
                 if self.swlabel > 2:
@@ -1158,7 +1167,7 @@ class Screen:
             self.acidrte = ""  # Click twice on same: route disappear
         else:
             self.acidrte = acid  # Show this route
-        return
+        return True
 
 
     def addnavwpt(self,name,lat,lon): # Draw new navdb waypoint
@@ -1168,11 +1177,10 @@ class Screen:
         self.redrawradbg = True  # redraw background
         return
 
-    def showacinfo(self, acid, infotext):
-        self.showroute(acid)
-        return True
+    def getviewctr(self):
+        return (self.ctrlat, self.ctrlon)
 
-    def getviewlatlon(self): # Return current viewing area in lat, lon
+    def getviewbounds(self): # Return current viewing area in lat, lon
         return self.lat0, self.lat1, self.lon0, self.lon1
 
     def drawradbg(self): # redraw radar background

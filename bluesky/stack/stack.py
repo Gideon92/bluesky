@@ -5,13 +5,14 @@ Methods:
     stack(cmdline)          : add a command to the command stack
     openfile(scenname)      : start playing a scenario file scenname.SCN
                               from scenario folder
-    savefile(scenname)      : save current traffic situation as
+    saveic(scenname)      : save current traffic situation as
                               scenario file scenname.SCN
     checkfile(t)            : check whether commands need to be
                               processed from scenario file
     process()               : central command processing method
 Created by  : Jacco M. Hoekstra (TU Delft)
 """
+from __future__ import print_function
 from math import *
 from random import seed
 import re
@@ -22,7 +23,7 @@ import numpy as np
 import bluesky as bs
 from bluesky.tools import geo, areafilter, plugin, plotter
 from bluesky.tools.aero import kts, ft, fpm, tas2cas, density
-from bluesky.tools.misc import txt2alt
+from bluesky.tools.misc import txt2alt, tim2txt, cmdsplit
 from bluesky.tools.calculator import calculator
 from bluesky.tools.position import txt2pos, islat
 from bluesky import settings
@@ -30,7 +31,7 @@ from bluesky import settings
 # Temporary fix for synthetic
 from . import synthetic as syn
 # Register settings defaults
-settings.set_variable_defaults(start_location='EHAM', scenario_path='scenario')
+settings.set_variable_defaults(start_location='EHAM', scenario_path='scenario', scenfile='')
 
 # Global variables
 cmddict   = dict()  # Defined in stack.init
@@ -65,7 +66,11 @@ cmdsynon  = {"ADDAIRWAY": "ADDAWY",
              "LOAD": "IC",
              "OPEN": "IC",
              "PAUSE": "HOLD",
+             "PLUGIN": "PLUGINS",
+             "PLUG-IN": "PLUGINS",
+             "PLUG-INS": "PLUGINS",
              "Q": "QUIT",
+             "RTF": "DTMULT",
              "STOP": "QUIT",
              "RUN": "OP",
              "RUNWAYS": "POS",
@@ -79,19 +84,56 @@ cmdsynon  = {"ADDAIRWAY": "ADDAWY",
              "VMETH": "RMETHV",
              "VRESOM": "RMETHV",
              "VRESOMETH": "RMETHV",
+
+# Currently not implemented TMX comands trigger message on this
+             "BGPASAS": "TMX",
+             "DFFLEVEL": "TMX",
+             "FFLEVEL": "TMX",
+             "FILTCONF": "TMX",
+             "FILTTRED": "TMX",
+             "FILTTAMB": "TMX",
+             "GRAB": "TMX",
+             "HDGREF": "TMX",
+             "MOVIE": "TMX",
+             "NAVDB": "TMX",
+             "PREDASAS": "TMX",
+             "RENAME": "TMX",
+             "RETYPE": "TMX",
+             "SWNLRPASAS": "TMX",
+             "TRAFRECDT": "TMX",
+             "TRAFLOGDT": "TMX",
+             "TREACT": "TMX",
+             "WINDGRID": "TMX", # Use a scenario file with WIND commands to defin a grid and/or profiles
+
+# Question mark is Help
              "?": "HELP"
-            }
+}
 
 
-cmdstack  = []
+cmdstack  = []  # The actual stack: Current commands to be processed
 
-scenname  = ""
-scenfile  = ""
-scentime  = []
-scencmd   = []
+# Scenario file which is read
+scenfile  = "" # Currently used scenario file (for reading)
+scenname  = "" # Currently used scenario name (for reading)
+scentime  = [] # Times of the commands from the read scenario file
+scencmd   = [] # Commands from the scenario file
+sender_rte = None  # bs net route to sender
 
+# When SAVEIC is used, we will also have a recoding scenario file handle
+savefile = None # File object of recording scenario file
+defexcl = ["PAN","ZOOM","HOLD","POS","INSEDIT","SAVEIC","QUIT"] # Commands to be excluded, default
+saveexcl = defexcl
+saveict0 = 0.0 # simt time of moment of SAVEIC command, 00:00:00.00 in recorded file
+
+# Note (P)CALL is always excluded! Commands in the called file are saved explicitly
+
+
+# Global version
+orgcmd = ""
 
 def init():
+    global orgcmd
+
     """ Initialization of the default stack commands. This function is called
         at the initialization of the main simulation object."""
 
@@ -133,7 +175,7 @@ def init():
         "ADDNODES": [
             "ADDNODES number",
             "int",
-            bs.sim.addNodes,
+            bs.sim.addnodes,
             "Add a simulation instance/node"
         ],
         "ADDWPT": [
@@ -168,16 +210,34 @@ def init():
             "Altitude command (autopilot)"
         ],
         "ASAS": [
-            "ASAS ON/OFF",
+            "ASAS ON/OFF/VMIN/VMAX",
             "[onoff]",
             bs.traf.asas.toggle,
             "Airborne Separation Assurance System switch"
+        ],
+        "ASASV": [
+            "ASASV MAX/MIN SPD (TAS in kts)",
+            "[txt,float]",
+            bs.traf.asas.SetVLimits,
+            "Airborne Separation Assurance System Speed"
         ],
         "AT": [
             "acid AT wpname [DEL] SPD/ALT [spd/alt]",
             "acid,wpinroute,[txt,txt]",
             lambda idx, *args: bs.traf.ap.route[idx].atwptStack(idx, *args),
             "Edit, delete or show spd/alt constraints at a waypoint in the route"
+        ],
+        "ATALT": [
+            "acid ATALT alt cmd ",
+            "acid,alt,string",
+            bs.traf.cond.ataltcmd,
+            "When a/c at given altitude , execute a command cmd"
+        ],
+        "ATSPD": [
+            "acid ATSPD spd cmd ",
+            "acid,spd,string",
+            bs.traf.cond.atspdcmd,
+            "When a/c reaches given speed, execute a command cmd"
         ],
         "BATCH": [
             "BATCH filename",
@@ -222,9 +282,16 @@ def init():
             "Define a circle-shaped area"
         ],
         "CRE": [
+# <<<<<<< HEAD
             "CRE acid,type,lat,lon,hdg,alt,spd,mass",
             "txt,txt,latlon,hdg,alt,spd,float",
             bs.traf.create,
+# =======
+#             "CRE acid,type,lat,lon,hdg,alt,spd",
+#             "txt,txt,latlon,hdg,alt,spd",
+#             lambda acid,actype,lat,lon,hdg,alt,spd: bs.traf.create(
+#                 1, actype, alt, spd, None, lat, lon, hdg, acid),
+# >>>>>>> upstream/master
             "Create an aircraft"
         ],
         "CRECONFS": [
@@ -240,9 +307,10 @@ def init():
             "Define a waypoint only for this scenario/run"
         ],
         "DEL": [
-            "DEL acid/WIND/shape",
+            "DEL acid/ALL/WIND/shape",
             "acid/txt",
             lambda a:   bs.traf.delete(a)    if isinstance(a, int) \
+                   else bs.traf.delete_all   if a == "ALL"\
                    else bs.traf.wind.clear() if a == "WIND" \
                    else areafilter.deleteArea(a),
             "Delete command (aircraft, wind, area)"
@@ -389,7 +457,7 @@ def init():
         "LINE": [
             "LINE name,lat,lon,lat,lon",
             "txt,latlon,latlon",
-            lambda name, *coords: bs.scr.objappend("LINE", name, coords),
+            lambda name, *coords: areafilter.defineArea(name, 'LINE', coords),
             "Draw a line on the radar screen"
         ],
         "LISTRTE": [
@@ -413,7 +481,7 @@ def init():
         "MCRE": [
             "MCRE n, [type/*, alt/*, spd/*, dest/*]",
             "int,[txt,alt,spd,txt]",
-            bs.traf.mcreate,
+            bs.traf.create,
             "Multiple random create of n aircraft in current view"
         ],
         # "METRIC": [
@@ -431,7 +499,7 @@ def init():
         "ND": [
             "ND acid",
             "txt",
-            lambda acid: bs.scr.feature("ND", acid),
+            bs.scr.shownd,
             "Show navigation display with CDTI"
         ],
         "NOISE": [
@@ -455,7 +523,7 @@ def init():
         "OP": [
             "OP",
             "",
-            bs.sim.start,
+            bs.sim.op,
             "Start/Run simulation or continue after pause"
         ],
         "ORIG": [
@@ -471,10 +539,10 @@ def init():
             "Pan screen (move view) to a waypoint, direction or aircraft"
         ],
         "PCALL": [
-            "PCALL filename [REL/ABS]",
-            "txt,[txt]",
+            "PCALL filename [REL/ABS/args]",
+            "txt,[txt,...]",
             lambda *args: openfile(*args, mergeWithExisting=True),
-            "Call commands in another scenario file"
+            "Call commands in another scenario file, %0, %1 etc specify arguments in called file"
         ],
         "PLOT": [
             "PLOT x, y [,dt,color,figure]",
@@ -483,7 +551,7 @@ def init():
             "Create a graph of variables x versus y."
         ],
         "PLUGINS": [
-            "PLUGINS LIST or LOAD plugin or REMOVE plugin",
+            "PLUGINS LIST or PLUGINS LOAD/REMOVE plugin ",
             "[txt,txt]",
             plugin.manage,
             "List all plugins, load a plugin, or remove a loaded plugin."
@@ -573,10 +641,10 @@ def init():
             "Set horizontal radius of resolution zone in nm"
         ],
         "SAVEIC": [
-            "SAVEIC filename",
-            "string",
+            "SAVEIC filename/EXCEPT NONE/cmds",
+            "[string]",
             saveic,
-            "Save current situation as IC"
+            "Save current situation as IC in filename or specify commands to exclude (like default display commands)"
         ],
         "SCHEDULE": [
             "SCHEDULE time, COMMAND+ARGS",
@@ -605,7 +673,7 @@ def init():
         "SSD": [
             "SSD ALL/CONFLICTS/OFF or SSD acid0, acid1, ...",
             "txt,[...]",
-            bs.scr.showssd,
+            lambda *args: bs.scr.feature('SSD', args),
             "Show state-space diagram (=conflict prevention display/predictive ASAS)"
         ],
         "SWRAD": [
@@ -633,12 +701,19 @@ def init():
             bs.sim.setclock,
             "Set simulated clock time"
         ],
+        "TMX": [
+            "TMX",
+            "",
+            lambda : bs.scr.echo("TMX command "+orgcmd+" not (yet?) implemented."),
+            "Stub for not implemented TMX commands"
+        ],
         "TRAIL": [
             "TRAIL ON/OFF, [dt] OR TRAIL acid color",
             "[acid/bool],[float/txt]",
             bs.traf.trails.setTrails,
             "Toggle aircraft trails on/off"
         ],
+
         "VNAV": [
             "VNAV acid,[ON/OFF]",
             "acid,[onoff]",
@@ -691,22 +766,45 @@ def init():
     stack('PAN ' + settings.start_location)
     stack("ZOOM 0.4")
 
+    # Load initial scenario if passed
+    if settings.scenfile:
+        openfile(settings.scenfile)
+
+
+def sender():
+    ''' Return the sender of the currently executed stack command.
+        If there is no sender id (e.g., when the command originates
+        from a scenario file), None is returned. '''
+    return sender_rte[-1] if sender_rte else None
+
+
+def routetosender():
+    ''' Return the route to the sender of the currently executed stack command.
+        If there is no sender id (e.g., when the command originates
+        from a scenario file), None is returned. '''
+    return sender_rte
 
 def get_scenname():
+    ''' Return the name of the current scenario.
+        This is either the name defined by the SCEN command,
+        or otherwise the filename of the scenario. '''
     return scenname
 
 
 def get_scendata():
+    ''' Return the scenario data that was loaded from a scenario file. '''
     return scentime, scencmd
 
 
 def set_scendata(newtime, newcmd):
+    ''' Set the scenario data. This is used by the batch logic. '''
     global scentime, scencmd
     scentime = newtime
     scencmd  = newcmd
 
 
 def scenarioinit(name):
+    ''' Implementation of the SCEN stack command. '''
     global scenname
     scenname = name
     return True, 'Starting scenario ' + name
@@ -743,7 +841,7 @@ def showhelp(cmd=''):
         when command is >filename
     """
     # No command given: show all
-    if len(cmd) == 0:
+    if not cmd:
         return "There are different ways to get help:\n" + \
                " HELP PDF  gives an overview of the existing commands\n" + \
                " HELP cmd  gives a help line on the command (syntax)\n"  + \
@@ -767,19 +865,19 @@ def showhelp(cmd=''):
     elif cmd in cmddict:
 
         # Check whether description is available, then show it as well
-        if len(cmddict) <= 3:
+        if len(cmddict[cmd]) <= 4:
             return cmddict[cmd][0]
         else:
-            return cmddict[cmd][0] + "\n" + cmddict[cmd][3]
+            return cmddict[cmd][0] + "\n" + cmddict[cmd][4]
 
     # Show help line for equivalent command
     elif cmd in cmdsynon:
 
         # Check whether description is available, then show it as well
-        if len(cmddict[cmdsynon[cmd]]) <= 3:
+        if len(cmddict[cmdsynon[cmd]]) <= 4:
             return cmddict[cmdsynon[cmd]][0]
         else:
-            return cmddict[cmdsynon[cmd]][0] + "\n" + cmddict[cmdsynon[cmd]][3]
+            return cmddict[cmdsynon[cmd]][0] + "\n" + cmddict[cmdsynon[cmd]][4]
 
     # Write command reference to tab-delimited text file
     elif cmd[0] == ">":
@@ -804,12 +902,12 @@ def showhelp(cmd=''):
         # Get info for all commands
         for item, lst in cmddict.items():
             line = item + "\t"
-            if len(lst) > 3:
-                line = line + lst[3]
+            if len(lst) > 4:
+                line = line + lst[4]
             line = line + "\t" + lst[0] + "\t" + str(lst[1]) + "\t"
 
             # Clean up string with function name and add if not a lambda function
-            funct = str(lst[2]).replace("<", "").replace(">", "")
+            funct = str(lst[3]).replace("<", "").replace(">", "")
 
             # Lambda function give no info, also remove hex address and "method" text
             if funct.count("lambda") == 0:
@@ -834,8 +932,8 @@ def showhelp(cmd=''):
 
         table = []  # for alphabetical sort use table
         for item in cmdsynon:
-            if cmdsynon[item] in cmddict and len(cmddict[cmdsynon[item]]) >= 3:
-                table.append(item + "\t" + cmdsynon[item] + "\t" + cmddict[cmdsynon[item]][3])
+            if cmdsynon[item] in cmddict and len(cmddict[cmdsynon[item]]) >= 4:
+                table.append(item + "\t" + cmdsynon[item] + "\t" + cmddict[cmdsynon[item]][4])
             else:
                 table.append(item + "\t" + cmdsynon[item] + "\t")
 
@@ -854,27 +952,33 @@ def showhelp(cmd=''):
 
 
 def setSeed(value):
+    ''' Function that implements the SEED stack command. '''
     seed(value)
     np.random.seed(value)
 
 
 def reset():
-    global scentime, scencmd, scenname
+    ''' Reset the stack. '''
+    global scentime, scencmd, scenname, saveexcl, defexcl
 
     scentime = []
     scencmd  = []
     scenname = ''
 
+    saveclose()
+    saveexcl = defexcl  # Commands to be excluded, set to default
 
-def stack(cmdline, sender_id=None):
-    # Stack one or more commands separated by ";"
+
+def stack(cmdline, cmdsender=None):
+    ''' Stack one or more commands separated by ";" '''
     cmdline = cmdline.strip()
-    if len(cmdline) > 0:
+    if cmdline:
         for line in cmdline.split(';'):
-            cmdstack.append((line, sender_id))
+            cmdstack.append((line, cmdsender))
 
 
 def sched_cmd(time, args, relative=False):
+    ''' Function that implements the SCHEDULE and DELAY commands. '''
     tostack = ','.join(args)
     # find spot in time list corresponding to passed time, get idx
     # insert time at idx in scentime, insert cmd at idx in scencmd
@@ -899,28 +1003,46 @@ def sched_cmd(time, args, relative=False):
     return True
 
 
-def openfile(fname, absrel='ABS', mergeWithExisting=False):
+def openfile(fname, *args, mergeWithExisting=False):
     global scentime, scencmd
 
+    orgfname = fname # Save original filename for if path spalitting fails (relative path)
+
+    if len(args)>0 and (args[0]=="ABS" or args[0]=="REL"):
+        absrel = args[0]
+        if len(args)>1:
+            arglst = args[1:]
+        else:
+            arglst = []
+    else:
+        absrel = "REL" # default relative to the time of call
+        arglst = args
+
+    # Check whether file exists
+
     # Split the incoming filename into a path, a filename and an extension
-    path, fname   = os.path.split(os.path.normpath(fname))
-    scenname, ext = os.path.splitext(fname)
-    if len(path) == 0:
-        path = os.path.normpath(settings.scenario_path)
-    if len(ext) == 0:
-        ext = '.scn'
+    path, fname = os.path.split(os.path.normpath(fname))
+    base, ext = os.path.splitext(fname)
+    path = path or os.path.normpath(settings.scenario_path)
+    ext  = ext  or '.scn'
 
     # The entire filename, possibly with added path and extension
-    scenfile = os.path.join(path, scenname + ext)
-
-    print("Opening "+scenfile)
+    fname_full = os.path.join(path, base + ext)
 
     # If timestamps in file should be interpreted as relative we need to add
     # the current simtime to every timestamp
     t_offset = bs.sim.simt if absrel == 'REL' else 0.0
 
-    if not os.path.exists(scenfile):
-        return False, "Error: cannot find file: " + scenfile
+    # Check for relative path, then it contains a path but we need to prefix scenario folder
+    if not os.path.exists(fname_full):
+        if not ".scn" in orgfname.lower():
+            orgfname = orgfname+".scn"
+
+        if os.path.exists(settings.scenario_path+"/"+orgfname):
+            fname_full = settings.scenario_path+"/"+orgfname
+        else:
+            print ("Openfile error: Cannot file",fname_full)
+            return False, "Error: cannot find file: " + fname_full
 
     # Split scenario file line in times and commands
     if not mergeWithExisting:
@@ -930,8 +1052,14 @@ def openfile(fname, absrel='ABS', mergeWithExisting=False):
         scentime = []
         scencmd  = []
 
-    with open(scenfile, 'r') as fscen:
+    with open(fname_full, 'r') as fscen:
         for line in fscen:
+
+            # Replace arguments if specified: %0 by first argument, %1 by seconds, %2
+            for iarg, txtarg in enumerate(arglst):
+                line = line.replace("%"+str(iarg),arglst[iarg])
+
+            # Skip emtpy lines and comments
             if len(line.strip()) > 12 and line[0] != "#":
                 # Try reading timestamp and command
                 try:
@@ -957,10 +1085,11 @@ def openfile(fname, absrel='ABS', mergeWithExisting=False):
 
 
 def ic(filename=''):
+    ''' Function implementing the IC stack command. '''
     global scenfile, scenname
 
     # Get the filename of new scenario
-    if filename == '':
+    if not filename:
         filename = bs.scr.show_file_dialog()
 
     # Clean up filename
@@ -974,35 +1103,66 @@ def ic(filename=''):
             scenfile    = filename
             scenname, _ = os.path.splitext(os.path.basename(filename))
             # Remember this filename in IC.scn in scenario folder
-            keepicfile = open(settings.scenario_path+"/"+"ic.scn","w")
-            keepicfile.write("# This file is used by BlueSky to save the last used scenario file\n")
-            keepicfile.write("# So in the console type 'IC IC' to restart the previously used scenario file\n")
-            keepicfile.write("00:00:00.00>IC "+filename+"\n")
-            keepicfile.close()
+            with open(settings.scenario_path+"/"+"ic.scn","w") as keepicfile:
+                keepicfile.write("# This file is used by BlueSky to save the last used scenario file\n")
+                keepicfile.write("# So in the console type 'IC IC' to restart the previously used scenario file\n")
+                keepicfile.write("00:00:00.00>IC "+filename+"\n")
+
             return True, "Opened " + filename
 
-        else:
-            return result
+        return result
 
 
 def checkfile(simt):
-    # Empty command buffer when it's time
+    ''' Check if commands from the scenario buffer need to be stacked. '''
     while len(scencmd) > 0 and simt >= scentime[0]:
         stack(scencmd[0])
         del scencmd[0]
         del scentime[0]
 
-    return
+
+def saveic(fname=None):
+    ''' Save the current traffic realization in a scenario file. '''
+    global savefile,saveexcl,saveict0
+
+    # No args? Give current status
+    if fname=="" or fname==None:
+        if savefile==None:
+            return False
+        else:
+            return True,"SAVEIC is already on\n"+"File: "+savefile.name
 
 
-def saveic(fname):
+    # Is it to modify exclude list?
+    if fname[:6].upper() == "CLOSE":
+        saveclose()
+        savefile = None
+        return True
+
+    elif fname[:6].upper() == "EXCEPT":
+        if len(fname.strip())==6: # Only except:
+            return True,"EXCEPT is now: "+" ".join(saveexcl)
+
+        key,newexclcmds = cmdsplit(fname[6:].upper())
+        if key.upper()=="NONE":
+            saveexcl = ["INSEDIT","SAVEIC"] # bare minimum
+        else:
+            newexclcmds.append(key)
+            saveexcl = newexclcmds
+        return True
+
+    # If recording is already on, give message
+    if savefile != None:
+        return False,"SAVEIC is already on\n"+"Savefile:  "+savefile.name
+
+
     # Add extension .scn if not already present
     if fname.lower().find(".scn") < 0:
         fname = fname + ".scn"
 
     # If it is with path don't touch it, else add path
     if fname.find("/") < 0:
-        scenfile = "./scenario/" + fname
+        scenfile = bs.settings.scenario_path +"/"+ fname
 
     try:
         f = open(scenfile, "w")
@@ -1010,9 +1170,10 @@ def saveic(fname):
         return False, "Error writing to file"
 
     # Write files
-    timtxt = "00:00:00.00>"
+    timtxt = "00:00:00.00>" # Current time will be zero
+    saveict0 = bs.sim.simt
 
-    for i in range(bs.traf.nbs.traf):
+    for i in range(bs.traf.ntraf):
         # CRE acid,type,lat,lon,hdg,alt,spd
         cmdline = "CRE " + bs.traf.id[i] + "," + bs.traf.type[i] + "," + \
                   repr(bs.traf.lat[i]) + "," + repr(bs.traf.lon[i]) + "," + \
@@ -1076,7 +1237,7 @@ def saveic(fname):
             cmdline = "ADDWPT " + bs.traf.id[i] + " "
             wpname = route.wpname[iwp]
             if wpname[:len(bs.traf.id[i])] == bs.traf.id[i]:
-                wpname = repr(route.lat[iwp]) + "," + repr(route.lon[iwp])
+                wpname = repr(route.wplat[iwp]) + "," + repr(route.wplon[iwp])
             cmdline = cmdline + wpname + ","
 
             if route.wpalt[iwp] >= 0.:
@@ -1092,9 +1253,30 @@ def saveic(fname):
 
             f.write(timtxt + cmdline + "\n")
 
-    # Saveic: should close
-    f.close()
+    # Saveic: save file
+    savefile = f
     return True
+
+# Save a command line when recording is on
+def savecmd(cmdline):
+    global savefile,saveict0
+    if savefile==None:
+        return
+
+    # Write in format "HH:MM:SS.hh>
+    timtxt = tim2txt(bs.sim.simt - saveict0)
+    savefile.write(timtxt+">"+cmdline+"\n")
+
+    return
+
+def saveclose():
+    global savefile
+    if savefile!=None:
+        savefile.close()
+
+    savefile = None
+
+    return
 
 # Regular expression for argument parser
 # Reading the regular expression:
@@ -1114,15 +1296,22 @@ def getnextarg(line):
 
 
 def process():
+    global savefile,saveexcl,orgcmd
+
     """process and empty command stack"""
+    global sender_rte
 
     # Process stack of commands
-    for (line, sender_id) in cmdstack:
-        #debug       print "stack is processing:",line
+    for (line, sender_rte) in cmdstack:
+        # debug print ("stack is processing:",line)
         # Empty line: next command
         line = line.strip()
         if not line:
             continue
+
+        # Stack reply: text and flags
+        echotext  = ''
+        echoflags = 0
 
         #**********************************************************************
         #=====================  Start of command parsing  =====================
@@ -1137,18 +1326,24 @@ def process():
         cmd       = cmdsynon.get(orgcmd) or orgcmd
         stackfun  = cmddict.get(cmd)
         # If no function is found for 'cmd', check if cmd is actually an aircraft id
-        if not stackfun and cmd in bs.traf.id:
+        if not stackfun and orgcmd in bs.traf.id:
             cmd, args = getnextarg(args)
-            args = orgcmd + ' ' + args
+            args      = orgcmd + ' ' + args
+            orgcmd    = cmd.upper()
+            cmd       = cmdsynon.get(orgcmd) or orgcmd
             # When no other args are parsed, command is POS
             stackfun = cmddict.get(cmd or 'POS')
 
         if stackfun:
+            # Recording of actual validated command unless in exclude list
+            if savefile!= None and cmd not in saveexcl and cmd!="PCALL":
+                savecmd(line)
+
             # Look up command in dictionary to get string with argtypes andhelp texts
             helptext, argtypes, argisopt, function = stackfun[:4]
 
             # Start with a fresh argument parser for each command
-            parser  = Argparser(argtypes, argisopt, args)
+            parser  = Argparser(argtypes, argisopt, args, function.__defaults__)
 
             # Call function return flag,text
             # flag: indicates sucess
@@ -1158,25 +1353,24 @@ def process():
                 if isinstance(results, bool):  # Only flag is returned
                     if not results:
                         if not args:
-                            bs.scr.echo(helptext, sender_id)
+                            echotext = helptext
                         else:
-                            bs.scr.echo("Syntax error: " + helptext, sender_id)
+                            echotext = "Syntax error: " + helptext
+                            echoflags = bs.BS_FUNERR
 
                 elif isinstance(results, tuple) and results:
                     if not results[0]:
-                        bs.scr.echo("Syntax error: " + (helptext if len(results) < 2 else ""), sender_id)
+                        echoflags = bs.BS_FUNERR
+                        echotext = "Syntax error: " + (helptext if len(results) < 2 else "")
                     # Maybe there is also an error/info message returned?
                     if len(results) >= 2:
-                        prefix = "" if results[0] == bs.SIMPLE_ECHO \
-                            else "{}: ".format(cmd)
-                        bs.scr.echo("{}{}".format(prefix, results[1]), sender_id)
+                        echotext += "{}: {}".format(cmd, results[1])
 
             else:  # syntax error:
-                bs.scr.echo(parser.error)
-                bs.scr.echo(helptext, sender_id)
+                echoflags = bs.BS_ARGERR
+                echotext = parser.error + '\n' + helptext
                 print("Error in processing arguments:")
                 print(line)
-                continue
 
         #----------------------------------------------------------------------
         # ZOOM command (or use ++++  or --  to zoom in or out)
@@ -1185,23 +1379,27 @@ def process():
             nplus = cmd.count("+") + cmd.count("=")  # = equals + (same key)
             nmin  = cmd.count("-")
             bs.scr.zoom(sqrt(2) ** (nplus - nmin), absolute=False)
+            if not "ZOOM" in saveexcl:
+                savecmd(line)
 
         #-------------------------------------------------------------------
         # Command not found
         #-------------------------------------------------------------------
         else:
+            echoflags = bs.BS_CMDERR
             if not args:
-                bs.scr.echo("Unknown command or aircraft: " + cmd, sender_id)
+                echotext = "Unknown command or aircraft: " + cmd
             else:
-                bs.scr.echo("Unknown command: " + cmd, sender_id)
+                echotext = "Unknown command: " + cmd
 
+        # Always return on command
+        bs.scr.echo(echotext, echoflags)
         #**********************************************************************
         #======================  End of command branches ======================
         #**********************************************************************
 
     # End of for-loop of cmdstack
     del cmdstack[:]
-    return
 
 
 class Argparser:
@@ -1211,17 +1409,18 @@ class Argparser:
     reflon    = -999.  # Reference longitude for searching in nav db
                        # in case of duplicate names
 
-    def __init__(self, argtypes, argisopt, argstring):
-        self.argtypes   = argtypes
-        self.argisopt   = argisopt
-        self.argstring  = argstring
-        self.arglist    = []
-        self.error      = ''  # Potential parsing error messages are stored here
-        self.additional = {}  # Sometimes a parse can generate extra arguments
-                              # that can be used to fill future empty arguments.
-                              # E.g., a runway gives a lat/lon, but also a heading.
-        self.refac      = -1  # Stored aircraft idx when an argument is parsed
-                              # for a function that acts on an aircraft.
+    def __init__(self, argtypes, argisopt, argstring, argdefaults=None):
+        self.argtypes    = argtypes
+        self.argisopt    = argisopt
+        self.argdefaults = list(argdefaults or [])
+        self.argstring   = argstring
+        self.arglist     = []
+        self.error       = ''  # Potential parsing error messages are stored here
+        self.additional  = {}  # Sometimes a parse can generate extra arguments
+                               # that can be used to fill future empty arguments.
+                               # E.g., a runway gives a lat/lon, but also a heading.
+        self.refac       = -1  # Stored aircraft idx when an argument is parsed
+                               # for a function that acts on an aircraft.
 
     def parse(self):
         curtype = 0
@@ -1242,10 +1441,18 @@ class Argparser:
                 result = self.parse_arg(argtypei)
                 if result:
                     # No value = None when this is allowed because it is an optional argument
-                    if result[0] is None and not self.argisopt[curtype]:
-                        self.error = 'No value given for mandatory argument ' + \
-                            self.argtypes[curtype]
-                        return False
+                    if None in result:
+                        if not self.argisopt[curtype]:
+                            self.error = 'No value given for mandatory argument ' + \
+                                self.argtypes[curtype]
+                            return False
+                        # If we have other default values than None, use those
+                        for i, v in enumerate(result):
+                            if v is None and self.argdefaults:
+                                result[i] = self.argdefaults[0]
+                                print('using default value from function: {}'.format(result[i]))
+                                self.argdefaults.pop(0)
+
 
                     self.arglist += result
                     break
@@ -1289,17 +1496,9 @@ class Argparser:
             result = [self.argstring]
             self.argstring = ''
 
-        # Empty arg or wildcard
-        elif curarg == "" or curarg == "*":
-            # If there was a matching additional argument stored previously use that one
-            if argtype in self.additional and curarg == "*":
-                result  = [self.additional[argtype]]
-            else:
-                # Otherwise result is None
-                result  = [None]
-
         elif argtype == "acid":  # aircraft id => parse index
             idx = bs.traf.id2idx(curarg)
+
             if idx < 0:
                 self.error += curarg + " not found"
                 return False
@@ -1309,6 +1508,16 @@ class Argparser:
             Argparser.reflon = bs.traf.lon[idx]
             self.refac   = idx
             result  = [idx]
+
+        # Empty arg or wildcard
+        elif curarg == "" or curarg == "*":
+            # If there was a matching additional argument stored previously use that one
+            if argtype in self.additional and curarg == "*":
+                result  = [self.additional[argtype]]
+            else:
+                # Otherwise result is None
+                result  = [None]
+
 
         elif argtype == "wpinroute":  # return text in upper case
             wpname = curarg
@@ -1350,12 +1559,14 @@ class Argparser:
             # airport:   "EHAM"
             # runway:    "EHAM/RW06" "LFPG/RWY23"
             # Default values
-            name         = curarg
+            name = curarg
 
             # Try aircraft first: translate a/c id into a valid position text with a lat,lon
             idx = bs.traf.id2idx(name)
+
+
             if idx >= 0:
-                name     = str(bs.traf.lat[idx]) + "," + str(bs.traf.lon[idx])
+                name= str(bs.traf.lat[idx]) + "," + str(bs.traf.lon[idx])
 
             # Check if lat/lon combination
             elif islat(curarg):
@@ -1364,7 +1575,7 @@ class Argparser:
                 name = curarg + "," + nextarg
 
             # apt,runway ? Combine into one string with a slash as separator
-            elif self.argstring[:2].upper() == "RW" and curarg in bs.navdb.aptid:
+            elif args[:2].upper() == "RW" and curarg in bs.navdb.aptid:
                 nextarg, args = getnextarg(args)
                 name = curarg + "/" + nextarg.upper()
 
@@ -1378,8 +1589,7 @@ class Argparser:
             elif argtype == "latlon":
                 # Set default reference lat,lon for duplicate name in navdb to screen
                 if Argparser.reflat < -180.:  # No reference avaiable yet: use screen center
-                    Argparser.reflat = bs.scr.ctrlat
-                    Argparser.reflon = bs.scr.ctrlon
+                    Argparser.reflat, Argparser.reflon = bs.scr.getviewctr()
 
                 success, posobj = txt2pos(name, Argparser.reflat, Argparser.reflon)
 
@@ -1407,7 +1617,7 @@ class Argparser:
         elif argtype == "pandir":
             pandir = curarg
             if pandir in ["LEFT", "RIGHT", "UP", "ABOVE", "RIGHT", "DOWN"]:
-                result  = pandir
+                result  = [pandir]
             else:
                 self.error += pandir + ' is not a valid pan argument'
                 return False
@@ -1477,7 +1687,7 @@ class Argparser:
 def distcalc(lat0, lon0, lat1, lon1):
     try:
         qdr, dist = geo.qdrdist(lat0, lon0, lat1, lon1)
-        return bs.SIMPLE_ECHO, "QDR = %.2f deg, Dist = %.3f nm" % (qdr % 360., dist)
+        return True, "QDR = %.2f deg, Dist = %.3f nm" % (qdr % 360., dist)
     except:
         return False, 'Error in dist calculation.'
 

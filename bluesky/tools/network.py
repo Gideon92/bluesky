@@ -3,8 +3,20 @@ import time
 import socket
 import threading
 import bluesky as bs
+import sys
 
-if bs.settings.gui == 'qtgl':
+
+def as_bytes(msg):
+    """
+    Encodes strings to bytes.
+    """
+    if sys.version_info.major == 3:
+        return msg.encode('utf-8')
+    else:
+        return msg
+
+
+if not bs.settings.is_sim:
     try:
         from PyQt5.QtCore import pyqtSlot
         from PyQt5.QtNetwork import QTcpServer, QTcpSocket
@@ -41,7 +53,9 @@ if bs.settings.gui == 'qtgl':
             self.processData(self.readAll())
 
         def sendReply(self, msg):
-            self.writeData('{}\n'.format(msg))
+            self.writeData(
+                as_bytes(
+                    '{}\n'.format(msg)))
 
         def processData(self, data):
             # Placeholder function; override it with your own implementation
@@ -77,7 +91,7 @@ if bs.settings.gui == 'qtgl':
             return len(self.connections.keys())
 
 
-elif bs.settings.gui == 'pygame':
+else:
     class TcpSocket(object):
         """A TCP Client receving message from server, analysing the data, and """
         def __init__(self):

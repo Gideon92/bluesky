@@ -98,7 +98,7 @@ class PerfBS(TrafficArrays):
                                               #taxi prior of after flight
             self.pf_flag      = np.array([])
 
-        self.engines      = []           # avaliable engine type per aircraft type
+            self.engines      = []           # avaliable engine type per aircraft type
         self.eta          = 0.8          # propeller efficiency according to Raymer
         self.Thr_s        = np.array([1., 0.85, 0.07, 0.3 ]) # Thrust settings per flight phase according to ICAO
 
@@ -129,10 +129,7 @@ class PerfBS(TrafficArrays):
         self.mass[-n:]              = coeffBS.MTOW[coeffidx] # aircraft weight
         self.Sref[-n:]              = coeffBS.Sref[coeffidx] # wing surface reference area
         self.etype[-n:]             = coeffBS.etype[coeffidx] # engine type of current aircraft
-
-        #self.engines is a list of list, not part of the RegisterElementParameters
-        for c in coeffidx:
-            self.engines.append(coeffBS.engines[c]) # avaliable engine type per aircraft type
+        self.engines[-n:]           = [coeffBS.engines[c] for c in coeffidx]
 
         # speeds
         self.refma[-n:]             = coeffBS.cr_Ma[coeffidx] # nominal cruise Mach at 35000 ft
@@ -201,14 +198,6 @@ class PerfBS(TrafficArrays):
         self.ffap[-n:]      = np.where(turboprops, 1. , coeffBS.ffap[jetidx]*coeffBS.n_eng[coeffidx])
         return
 
-    def delete(self,idx):
-        super(PerfBS,self).delete(idx)
-        del self.engines[idx]
-
-    def reset(self):
-        super(PerfBS,self).reset()
-        self.engines = []
-
     def perf(self,simt):
         if abs(simt - self.t0) >= self.dt:
             self.t0 = simt
@@ -231,12 +220,14 @@ class PerfBS(TrafficArrays):
 
         # scaling factors for CD0 and CDi during flight phases according to FAA (2005): SAGE, V. 1.5, Technical Manual
 
+        # For takeoff (phase = 6) drag is assumed equal to the takeoff phase
         CD0f = (self.phase==1)*(self.etype==1)*coeffBS.d_CD0j[0] + \
                (self.phase==2)*(self.etype==1)*coeffBS.d_CD0j[1]  + \
                (self.phase==3)*(self.etype==1)*coeffBS.d_CD0j[2] + \
                (self.phase==4)*(self.etype==1)*coeffBS.d_CD0j[3] + \
-               (self.phase==5)*(self.etype==1)*(bs.traf.alt>=450)*coeffBS.d_CD0j[4] + \
-               (self.phase==5)*(self.etype==1)*(bs.traf.alt<450)*coeffBS.d_CD0j[5] + \
+               (self.phase==5)*(self.etype==1)*(bs.traf.alt>=450.0)*coeffBS.d_CD0j[4] + \
+               (self.phase==5)*(self.etype==1)*(bs.traf.alt<450.0)*coeffBS.d_CD0j[5] + \
+               (self.phase==6)*(self.etype==1)*coeffBS.d_CD0j[0] + \
                (self.phase==1)*(self.etype==2)*coeffBS.d_CD0t[0] + \
                (self.phase==2)*(self.etype==2)*coeffBS.d_CD0t[1]  + \
                (self.phase==3)*(self.etype==2)*coeffBS.d_CD0t[2] + \
@@ -244,12 +235,14 @@ class PerfBS(TrafficArrays):
                    # (self.phase==5)*(self.etype==2)*(self.alt>=450)*coeffBS.d_CD0t[4] + \
                    # (self.phase==5)*(self.etype==2)*(self.alt<450)*coeffBS.d_CD0t[5]
 
+        # For takeoff (phase = 6) induced drag is assumed equal to the takeoff phase
         kf =   (self.phase==1)*(self.etype==1)*coeffBS.d_kj[0] + \
                (self.phase==2)*(self.etype==1)*coeffBS.d_kj[1]  + \
                (self.phase==3)*(self.etype==1)*coeffBS.d_kj[2] + \
                (self.phase==4)*(self.etype==1)*coeffBS.d_kj[3] + \
                (self.phase==5)*(self.etype==1)*(bs.traf.alt>=450)*coeffBS.d_kj[4] + \
                (self.phase==5)*(self.etype==1)*(bs.traf.alt<450)*coeffBS.d_kj[5] + \
+               (self.phase==6)*(self.etype==1)*coeffBS.d_kj[0] + \
                (self.phase==1)*(self.etype==2)*coeffBS.d_kt[0] + \
                (self.phase==2)*(self.etype==2)*coeffBS.d_kt[1]  + \
                (self.phase==3)*(self.etype==2)*coeffBS.d_kt[2] + \
@@ -263,7 +256,6 @@ class PerfBS(TrafficArrays):
 
         # compute drag: CD = CD0 + CDi * CL^2 and D = rho/2*VTAS^2*CD*S
         self.D = cd*self.qS
-
         # energy share factor and crossover altitude
         epsalt = np.array([0.001]*bs.traf.ntraf)
         self.climb = np.array(bs.traf.delalt > epsalt)
@@ -280,9 +272,9 @@ class PerfBS(TrafficArrays):
 
         # determine thrust
         self.Thr = (((bs.traf.vs*self.mass*g0)/(self.ESF*np.maximum(bs.traf.eps, bs.traf.tas))) + self.D)
-
         # determine thrust required to fulfill requests from pilot
-        self.Thr_pilot = (((bs.traf.pilot.vs*self.mass*g0)/(self.ESF*np.maximum(bs.traf.eps, bs.traf.pilot.tas))) + self.D)
+        # self.Thr_pilot = (((bs.traf.pilot.vs*self.mass*g0)/(self.ESF*np.maximum(bs.traf.eps, bs.traf.pilot.tas))) + self.D)
+        self.Thr_pilot = (((bs.traf.ap.vs*self.mass*g0)/(self.ESF*np.maximum(bs.traf.eps, bs.traf.pilot.tas))) + self.D)
 
         # maximum thrust jet (Bruenig et al., p. 66):
         mt_jet = self.rThr*(bs.traf.rho/rho0)**0.75
@@ -389,18 +381,13 @@ class PerfBS(TrafficArrays):
 
         return
 
-    def acceleration(self, simdt):
+    def acceleration(self):
         # define acceleration: aircraft taxiing and taking off use ground acceleration,
         # landing aircraft use ground deceleration, others use standard acceleration
 
-        ax = ((self.phase==PHASE['IC']) + (self.phase==PHASE['CR']) + \
-                     (self.phase==PHASE['AP']) + (self.phase==PHASE['LD']) )                         \
-                 * np.minimum(abs(bs.traf.delspd / max(1e-8,simdt)), bs.traf.ax) + \
-             ((self.phase==PHASE['TO']) + (self.phase==PHASE['GD'])*(1-self.post_flight))      \
-                 * np.minimum(abs(bs.traf.delspd / max(1e-8,simdt)), self.gr_acc) +  \
-              (self.phase==PHASE['GD'])*self.post_flight                                        \
-                 * np.minimum(abs(bs.traf.delspd / max(1e-8,simdt)), self.gr_dec)
-
+        ax = ((self.phase==PHASE['IC']) + (self.phase==PHASE['CR']) + (self.phase==PHASE['AP']) + (self.phase==PHASE['LD'])) * 0.5 \
+                + ((self.phase==PHASE['TO']) + (self.phase==PHASE['GD'])*(1-self.post_flight)) * self.gr_acc  \
+                +  (self.phase==PHASE['GD']) * self.post_flight * self.gr_dec
 
         return ax
 
